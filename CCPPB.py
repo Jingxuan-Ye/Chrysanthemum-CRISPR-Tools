@@ -181,7 +181,7 @@ with col4:
     raw_spacers = st.text_area(
         "Protospacers_hidden",
         height=180,
-        placeholder="Enter protospacer sequences, one per line or comma-separated...",
+        placeholder="Enter one or more protospacer sequences, with one sequence per line or multiple sequences separated by commas.",
         label_visibility="collapsed"
     )
     st.markdown("<span style='color: #367c39; font-size: 14px;'>e.g., <i>ATCGATCGATCGATCGATCG</i></span>",
@@ -239,7 +239,7 @@ if submit_btn:
                 df.to_excel(writer, index=False, sheet_name="primers")
             output.seek(0)
             st.download_button(
-                label="📥 Download XLSX",
+                label="📥 Download xlsx",
                 data=output.getvalue(),
                 file_name="CCPPB_primers.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
