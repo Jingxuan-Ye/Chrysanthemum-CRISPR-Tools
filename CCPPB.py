@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import re
+from io import BytesIO
 from typing import List, Tuple
 
 # ==========================================
@@ -8,7 +9,7 @@ from typing import List, Tuple
 # ==========================================
 P1F_PREFIX = "atatatGGTCTCT"
 PF_PREFIX = "atatatGGTCTCA"
-PR_PREFIX = "ATTATTGGTCTCA"
+PR_PREFIX = "attattGGTCTCA"
 
 CHRY_STU2_CONFIG = {
     "start_link": "gcag",
@@ -124,7 +125,7 @@ def build_primers(spacers: List[str]) -> List[dict]:
 # Web Frontend UI
 # ==========================================
 
-st.set_page_config(page_title="CCPPB - Primer Builder", layout="centered")
+st.set_page_config(page_title="CCPPB - Primer Builder", layout="wide")
 
 st.markdown("""
     <style>
@@ -152,23 +153,30 @@ st.markdown("""
         font-weight: 600;
         margin-top: 5px;
     }
+    .field-label {
+        font-size: 16px;
+        font-weight: 600;
+        color: #333333;
+        white-space: nowrap;
+        margin-top: 6px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="custom-header"><em>Chrysanthemum</em> CRISPR Plasmid Primer builder (CCPPB)</div>',
+st.markdown('<div class="custom-header"><em>Chrysanthemum</em> CRISPR Plasmid Primer Builder (CCPPB)</div>',
             unsafe_allow_html=True)
 
-col1, col2 = st.columns([1, 4])
+col1, col2 = st.columns([1.6, 5.4], vertical_alignment="center")
 with col1:
-    st.write("System :")
+    st.markdown('<div class="field-label">System :</div>', unsafe_allow_html=True)
 with col2:
     st.radio("System_hidden", options=["Chry-STU2.0 (Csy4/SpCas9)"], label_visibility="collapsed", horizontal=True)
 
 st.write("")
 
-col3, col4 = st.columns([1, 4])
+col3, col4 = st.columns([1.6, 5.4], vertical_alignment="top")
 with col3:
-    st.write("Input Protospacers :")
+    st.markdown('<div class="field-label">Input Protospacers :</div>', unsafe_allow_html=True)
 with col4:
     raw_spacers = st.text_area(
         "Protospacers_hidden",
@@ -214,14 +222,27 @@ if submit_btn:
                 f"✅ Run successful! Generation mode: {mode_text}. Overhang conflicts automatically resolved by dynamic shifting.")
 
             df = pd.DataFrame(primers)
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(
+                df,
+                use_container_width=True,
+                hide_index=True,
+                height=min(35 + len(df) * 42, 500),
+                column_config={
+                    "primer_name": st.column_config.TextColumn("primer_name", width="medium"),
+                    "sequence": st.column_config.TextColumn("sequence", width="large"),
+                    "note": st.column_config.TextColumn("note", width="large"),
+                },
+            )
 
-            csv = df.to_csv(index=False, sep='\t')
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                df.to_excel(writer, index=False, sheet_name="primers")
+            output.seek(0)
             st.download_button(
-                label="📥 Download TSV",
-                data=csv,
-                file_name="CCPPB_primers.tsv",
-                mime="text/tab-separated-values"
+                label="📥 Download XLSX",
+                data=output.getvalue(),
+                file_name="CCPPB_primers.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
         except Exception as e:
