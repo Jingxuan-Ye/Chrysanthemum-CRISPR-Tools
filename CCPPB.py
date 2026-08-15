@@ -1,10 +1,12 @@
 import json
 import re
+from datetime import datetime
 from io import BytesIO
 from typing import List, Tuple
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -129,31 +131,33 @@ def build_primers(spacers: List[str]) -> List[dict]:
 # ==========================================
 # Visitor Counter
 # ==========================================
-# CounterAPI stores the total outside Streamlit. The fixed namespace/key keep
-# the same counter after redeployment or an app URL change.
+# CounterAPI stores the counters outside Streamlit. The fixed namespace/key
+# keep the totals stable after redeployment or an app URL change.
 COUNTER_NAMESPACE = "chrysanthemum-crispr-tools"
 COUNTER_KEY = "ccppb"
 COUNTER_START_NUMBER = 25
+COUNTER_LIKE_KEY = "ccppb-likes"
+APP_TIMEZONE = ZoneInfo("Asia/Shanghai")
 COUNTER_TIMEOUT_SECONDS = 3
 
 
-def count_visitor_once() -> int | None:
-    """Increment the external counter once per Streamlit browser session.
-
-    st.session_state survives widget-triggered reruns for the current browser
-    session, so pressing Run will not increment the visitor number again.
-    A new browser session gets one new count. The external service is only
-    used for persistence; no IP address or personal identifier is stored here.
-    """
-    if st.session_state.get("visitor_counter_counted", False):
-        return st.session_state.get("visitor_counter_value")
-
+def counter_request(
+    action: str,
+    key: str,
+    *,
+    read_only: bool = False,
+    start_number: int | None = None,
+) -> int | None:
+    """Read or increment one CounterAPI counter."""
     namespace = quote(COUNTER_NAMESPACE, safe="")
-    key = quote(COUNTER_KEY, safe="")
-    endpoint = (
-        f"https://counterapi.com/api/{namespace}/view/{key}"
-        f"?startNumber={COUNTER_START_NUMBER}"
-    )
+    encoded_key = quote(key, safe="")
+    params = {}
+    if read_only:
+        params["readOnly"] = "true"
+    if start_number is not None:
+        params["startNumber"] = str(start_number)
+    query = f"?{urlencode(params)}" if params else ""
+    endpoint = f"https://counterapi.com/api/{namespace}/{action}/{encoded_key}{query}"
     request = Request(endpoint, headers={"User-Agent": "CCPPB visitor counter"})
 
     try:
@@ -161,12 +165,63 @@ def count_visitor_once() -> int | None:
             payload = json.loads(response.read().decode("utf-8"))
         count = int(payload["value"])
     except (HTTPError, URLError, TimeoutError, ValueError, KeyError, json.JSONDecodeError):
-        # Visitor statistics must not prevent primer design from working.
+        return None
+
+    return count
+
+
+def count_visitor_once() -> int | None:
+    if st.session_state.get("visitor_counter_counted", False):
+        return st.session_state.get("visitor_counter_value")
+
+    count = counter_request("view", COUNTER_KEY, start_number=COUNTER_START_NUMBER)
+    if count is None:
         return None
 
     st.session_state["visitor_counter_counted"] = True
     st.session_state["visitor_counter_value"] = count
     return count
+
+
+def count_monthly_visit_once() -> int | None:
+    month_key = f"{COUNTER_KEY}-{datetime.now(APP_TIMEZONE):%Y-%m}"
+    if st.session_state.get("monthly_counter_key") == month_key:
+        return st.session_state.get("monthly_counter_value")
+
+    count = counter_request("view", month_key)
+    if count is None:
+        return None
+
+    st.session_state["monthly_counter_key"] = month_key
+    st.session_state["monthly_counter_value"] = count
+    return count
+
+
+def get_like_count() -> int | None:
+    if "like_counter_value" in st.session_state:
+        return st.session_state["like_counter_value"]
+
+    count = counter_request("vote", COUNTER_LIKE_KEY, read_only=True)
+    if count is not None:
+        st.session_state["like_counter_value"] = count
+    return count
+
+
+def add_like_once() -> int | None:
+    if st.session_state.get("like_clicked", False):
+        return st.session_state.get("like_counter_value")
+
+    count = counter_request("vote", COUNTER_LIKE_KEY)
+    if count is None:
+        return None
+
+    st.session_state["like_clicked"] = True
+    st.session_state["like_counter_value"] = count
+    return count
+
+
+def format_count(value: int | None) -> str:
+    return f"{value:,}" if value is not None else "—"
 
 
 # ==========================================
@@ -207,6 +262,26 @@ st.markdown("""
         color: #333333;
         white-space: nowrap;
         margin-top: 6px;
+    }
+    .stats-card {
+        background: #f8fbf8;
+        border: 1px solid #dbe7dc;
+        border-top: 3px solid #367c39;
+        border-radius: 6px;
+        padding: 14px 16px 13px;
+        min-height: 82px;
+    }
+    .stats-label {
+        color: #5b675c;
+        font-size: 14px;
+        font-weight: 600;
+        margin-bottom: 5px;
+    }
+    .stats-value {
+        color: #2b612d;
+        font-size: 26px;
+        font-weight: 700;
+        line-height: 1.1;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -298,15 +373,52 @@ if submit_btn:
 
 
 # ==========================================
-# Footer Visitor Display
+# Footer Statistics
 # ==========================================
 visitor_count = count_visitor_once()
+monthly_visit_count = count_monthly_visit_once()
+like_count = get_like_count()
+
 st.markdown("---")
-visitor_col, note_col = st.columns([1.6, 5.4], vertical_alignment="center")
+visitor_col, likes_col, monthly_col = st.columns(3, gap="medium")
+
 with visitor_col:
-    st.metric("Visitors", visitor_count if visitor_count is not None else "—")
-with note_col:
-    if visitor_count is None:
-        st.caption("Visitor count is temporarily unavailable; the primer builder is still working.")
-    else:
-        st.caption("One count per browser session. This is an independent visitor counter, not Streamlit Cloud Analytics.")
+    st.markdown(
+        f"""
+        <div class="stats-card">
+            <div class="stats-label">Visitors</div>
+            <div class="stats-value">{format_count(visitor_count)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with likes_col:
+    st.markdown(
+        f"""
+        <div class="stats-card">
+            <div class="stats-label">Likes</div>
+            <div class="stats-value">{format_count(like_count)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if st.button(
+        "👍 Liked" if st.session_state.get("like_clicked", False) else "👍 Like",
+        key="like_button",
+        disabled=st.session_state.get("like_clicked", False),
+    ):
+        if add_like_once() is not None:
+            st.rerun()
+        st.toast("Please try again later.", icon="⚠️")
+
+with monthly_col:
+    st.markdown(
+        f"""
+        <div class="stats-card">
+            <div class="stats-label">New visits this month</div>
+            <div class="stats-value">{format_count(monthly_visit_count)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
