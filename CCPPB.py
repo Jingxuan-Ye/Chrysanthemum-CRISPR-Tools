@@ -1,8 +1,13 @@
-import streamlit as st
-import pandas as pd
+import json
 import re
 from io import BytesIO
 from typing import List, Tuple
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
+
+import pandas as pd
+import streamlit as st
 
 # ==========================================
 # Core Biological & Sequence Configurations
@@ -122,6 +127,49 @@ def build_primers(spacers: List[str]) -> List[dict]:
 
 
 # ==========================================
+# Visitor Counter
+# ==========================================
+# CounterAPI stores the total outside Streamlit. The fixed namespace/key keep
+# the same counter after redeployment or an app URL change.
+COUNTER_NAMESPACE = "chrysanthemum-crispr-tools"
+COUNTER_KEY = "ccppb"
+COUNTER_START_NUMBER = 25
+COUNTER_TIMEOUT_SECONDS = 3
+
+
+def count_visitor_once() -> int | None:
+    """Increment the external counter once per Streamlit browser session.
+
+    st.session_state survives widget-triggered reruns for the current browser
+    session, so pressing Run will not increment the visitor number again.
+    A new browser session gets one new count. The external service is only
+    used for persistence; no IP address or personal identifier is stored here.
+    """
+    if st.session_state.get("visitor_counter_counted", False):
+        return st.session_state.get("visitor_counter_value")
+
+    namespace = quote(COUNTER_NAMESPACE, safe="")
+    key = quote(COUNTER_KEY, safe="")
+    endpoint = (
+        f"https://counterapi.com/api/{namespace}/view/{key}"
+        f"?startNumber={COUNTER_START_NUMBER}"
+    )
+    request = Request(endpoint, headers={"User-Agent": "CCPPB visitor counter"})
+
+    try:
+        with urlopen(request, timeout=COUNTER_TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        count = int(payload["value"])
+    except (HTTPError, URLError, TimeoutError, ValueError, KeyError, json.JSONDecodeError):
+        # Visitor statistics must not prevent primer design from working.
+        return None
+
+    st.session_state["visitor_counter_counted"] = True
+    st.session_state["visitor_counter_value"] = count
+    return count
+
+
+# ==========================================
 # Web Frontend UI
 # ==========================================
 
@@ -181,7 +229,7 @@ with col4:
     raw_spacers = st.text_area(
         "Protospacers_hidden",
         height=180,
-        placeholder="Enter one or more protospacer sequences, with one sequence per line or multiple sequences separated by commas.",
+        placeholder="Enter protospacer sequences, one per line or comma-separated...",
         label_visibility="collapsed"
     )
     st.markdown("<span style='color: #367c39; font-size: 14px;'>e.g., <i>ATCGATCGATCGATCGATCG</i></span>",
@@ -210,7 +258,7 @@ if submit_btn:
                     truncated_info.append((s, sp20, L))
                 spacers.append(sp20)
 
-            # The new build_primers function automatically resolves overhang conflicts
+            # The build_primers function automatically resolves overhang conflicts
             primers = build_primers(spacers)
 
             if truncated_info:
@@ -239,7 +287,7 @@ if submit_btn:
                 df.to_excel(writer, index=False, sheet_name="primers")
             output.seek(0)
             st.download_button(
-                label="📥 Download xlsx",
+                label="📥 Download XLSX",
                 data=output.getvalue(),
                 file_name="CCPPB_primers.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -247,3 +295,18 @@ if submit_btn:
 
         except Exception as e:
             st.error(f"❌ Design failed: {str(e)}")
+
+
+# ==========================================
+# Footer Visitor Display
+# ==========================================
+visitor_count = count_visitor_once()
+st.markdown("---")
+visitor_col, note_col = st.columns([1.6, 5.4], vertical_alignment="center")
+with visitor_col:
+    st.metric("Visitors", visitor_count if visitor_count is not None else "—")
+with note_col:
+    if visitor_count is None:
+        st.caption("Visitor count is temporarily unavailable; the primer builder is still working.")
+    else:
+        st.caption("One count per browser session. This is an independent visitor counter, not Streamlit Cloud Analytics.")
